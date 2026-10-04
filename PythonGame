@@ -25,7 +25,7 @@ class AudioManager:
         }
 
     def play_event_music(self, track_key):
-        """Switches music based on game events (like creepy text appearing)."""
+        # Switches music based on game events (like creepy text appearing).
         if track_key not in self.tracks:
             print(f"[Audio Error] Track key '{track_key}' not found in tracks dictionary.")
             return
@@ -99,9 +99,9 @@ class Combatant:
         self.crit_damage = crit_damage
         self.statuses = {}
 
-    #Crit calculation method
+    # Crit calculation method
     def calculate_damage(self, base_damage: int) -> tuple[int, bool]:
-        #Calculates final damage and returns (damage_amount, is_crit).
+        # Calculates final damage and returns (damage_amount, is_crit).
         is_crit = random.random() < self.crit_chance
         if is_crit:
             final_damage = int(base_damage * self.crit_damage)
@@ -152,9 +152,13 @@ class Player(Combatant):
             try:
                 action_choice = int(input("Select (1-4): "))
             
-                #Option 1: Basic attack
+                # Option 1: Basic attack
                 if action_choice == 1:
                     target = self._select_target(live_enemies)
+
+                    if target is None:
+                        continue  # Go back to main loop if no target selected
+
                     # Simple attack logic; handles crit based on stats
                     damage = self.attack
                     import random
@@ -164,11 +168,12 @@ class Player(Combatant):
                     
                     target.hp = max(0, target.hp - damage)
                     print(f"{self.name} attacks {target.name} for {damage} damage!")
-                    if damage > target.hp:
+
+                    if target.hp <= 0:
                         print(f"\n{target.name} is killed!")
                     return "continue"
 
-                #Option 2: Use abilities
+                # Option 2: Use abilities
                 elif action_choice == 2:
                     if not self.abilities:
                         print("You don't know any abilities yet!")
@@ -207,13 +212,16 @@ class Player(Combatant):
                             else:
                                 # For single target, run the targeting menu prompt normally
                                 target = self._select_target(live_enemies)
+
+                                if target is None:
+                                    continue  # Go back to main loop if no target selected
                                 # Pass the target AND return the result so Combat can see if it's "single" or "aoe"
                                 return ability_data["func"](target)
                         else:
                             print(f"Not enough mana! You need {ability_data['cost']}.")
                             continue
 
-                #Option 3: Use potions
+                # Option 3: Use potions
                 elif action_choice == 3:
                     # Filter items to show only things we actually have in stock
                     available_items = [item for item in self.inventory if item["qty"] > 0]
@@ -273,13 +281,19 @@ class Player(Combatant):
 
     def _select_target(self, live_enemies):
         # Helper method to isolate target selection parsing
+        back_option = len(live_enemies) + 1
         print("\nSelect a target:")
         for idx, enemy in enumerate(live_enemies, start=1):
             print(f"[{idx}] {enemy.name} (HP: {enemy.hp})")
+        print(f"[{back_option}] Back")
 
         while True:
             try:
-                target_choice = int(input(f"Select Target (1-{len(live_enemies)}): "))
+                target_choice = int(input(f"Select Target (1-{back_option}): "))
+
+                if target_choice == back_option:
+                    return None # Go back to main loop
+                
                 if 1 <= target_choice <= len(live_enemies):
                     return live_enemies[target_choice - 1]
                 print("Invalid target number. Try again.")
@@ -320,12 +334,12 @@ class Boss(Combatant):
         damage, is_crit = self.calculate_damage(30)
         action_name = "Smash" if is_crit else "Swipe"
         
-        if is_crit:
-            print(f"WARNING! {self.name} is unleashing a massive {action_name} for 30 damage!")
-            time.sleep(1)
-        else:
-            print(f"{self.name} lunges forward with a {action_name} for 30 damage!")
-            time.sleep(1)
+
+        print(f"WARNING! {self.name} is unleashing a massive {action_name} for 30 damage!")
+        time.sleep(1)
+
+        print(f"{self.name} lunges forward with a {action_name} for 30 damage!")
+        time.sleep(1)
             
         return damage
 
@@ -390,7 +404,7 @@ class Combat:
 
             # If enemy has status, activate the status effect
             if hasattr(current, 'statuses'):
-                # Check for Frozen status
+                # Checks for Frozen status
                 if current.statuses.get("Frozen", 0) > 0:
                     print(f"\n{current.name} is frozen solid and skips their turn!")
                     current.statuses["Frozen"] -= 1  # Reduce duration by 1 turn
@@ -402,7 +416,7 @@ class Combat:
                         
                     time.sleep(1)
                     continue  # Skip to the next combatant's turn
-                #Check for Kindle status
+                # Checks for Kindle status
                 elif current.statuses.get("Kindle", 0) > 0:
                     burn_damage = 10
                     current.hp -= burn_damage
@@ -419,7 +433,7 @@ class Combat:
                         print(f"\n{current.name}'s fire went out!")
                     
                     time.sleep(1)
-
+                # Checks for Shock status
                 elif current.statuses.get("Shock", 0) > 0:
                     shocked_damage = 5
                     current.hp -= shocked_damage
@@ -519,7 +533,7 @@ class Combat:
                 if result == "flee":
                     return "flee"       
                 
-                # UNIVERSAL AOE IMPLEMENTATION
+                # Universal handling for AoE, single target, heal, and buff actions
                 # If an action returns e.g. ("aoe", 10), apply it to all living targets here
                 elif isinstance(result, tuple) and result[0] == "aoe":
                     action_type = result[0]
@@ -545,11 +559,11 @@ class Combat:
                     single_dmg = result[1]
                     target_enemy = result[2]
                     
-                    # PRINT SINGLE TARGET DAMAGE FROM CLASS ABILITY
+                    # Print single target damage and apply it to the enemy's HP
                     target_enemy.hp = max(0, target_enemy.hp - single_dmg)
                     print(f"{target_enemy.name} takes {single_dmg} damage from the skill! (HP: {target_enemy.hp})")
                     
-                    # CHECK DEATH FROM SINGLE TARGET SKILL
+                    # Check death
                     if target_enemy.hp <= 0:
                         print(f"{target_enemy.name} is killed!")
                     time.sleep(1)
@@ -557,7 +571,7 @@ class Combat:
                 # Heal implementation
                 elif isinstance(result, tuple) and result[0] == "heal":
                     heal_amount = result[1]
-                    # Ensure healing doesn't overshoot their maximum health pool
+                    # Ensures healing doesn't overshoot maximum health pool
                     if hasattr(current, 'max_hp'):
                         current.hp = min(current.max_hp, current.hp + heal_amount)
                     else:
@@ -580,6 +594,10 @@ class Combat:
                     if buff_name == "Wild Shape" and isinstance(current, Player):                        
                         # Since turn runner already incremented self.current_turn_index,
                         # stepping it back by 1 forces the engine to target the Player again next turn
+                        if hasattr(self, 'current_turn_index'):
+                            self.current_turn_index -= 1
+
+                    if buff_name == "Inspiration" and isinstance(current, Player):                        
                         if hasattr(self, 'current_turn_index'):
                             self.current_turn_index -= 1
 
@@ -674,8 +692,8 @@ class Shop:
     def __init__(self):
         # Catalog of items available to buy, with their stats and gold costs
         self.catalog = {
-            1: {"name": "Healing Potion", "type": "hp", "value": 30, "cost": 15},
-            2: {"name": "Mana Potion", "type": "mana", "value": 20, "cost": 10},
+            1: {"name": "Healing Potion", "type": "hp", "value": 30, "cost": 10},
+            2: {"name": "Mana Potion", "type": "mana", "value": 20, "cost": 15},
         }
 
     def enter_shop(self, player):
@@ -951,7 +969,7 @@ class PALADIN(Player):
         super().__init__(name, 110, 10, 60, crit_chance=0.15, crit_damage=2.0)
         self.abilities = {
             "Divine Smite (Deals 25 damage)": {"cost": 0, "is_single": True, "func": self.divine_smite},
-            "Holy Light (Restores 20 HP)": {"cost": 10, "is_buff": True, "func": self.holy_light},
+            "Holy Supplication (Restores 20 HP)": {"cost": 10, "is_heal": True, "func": self.holy_supplication},
             "Circle of the Righteous (Deals 10 damage to all enemies)": {"cost": 0, "is_aoe": True, "func": self.circle_of_the_righteous}
         }
     def divine_smite(self, target):
@@ -965,7 +983,7 @@ class PALADIN(Player):
 
         return ("single", final_dmg, target)
     
-    def holy_light(self,player):
+    def holy_supplication(self, player):
         gained_hp = 20
         old_hp = self.hp
         self.hp = min(self.max_hp, self.hp + gained_hp)
@@ -1168,14 +1186,14 @@ class LIGHTWEAVER(Player):
         return("single", final_dmg, target)
 
     def lights_radiance(self, target):
-        base_dmg = 15
+        base_dmg = 5
         final_dmg, is_crit = self.calculate_damage(base_dmg)
         
         target_enemy = target
         target_enemy.statuses["Stun"] = 2
 
         if is_crit:
-            print(f"\nCRITICAL HIT!")
+            print(f"\nCRITICAL HIT! {target.name} feels as though they are staring into the sun, taking {final_dmg} damage and Stuning them for 2 turns!")
         else:
             print(f"\n{self.name} releases their inner light, blinding and Stunning {target.name} for 2 turns!")
 
@@ -1183,8 +1201,7 @@ class LIGHTWEAVER(Player):
 
 
     def halo_of_mirrors(self, live_enemies):
-        self.attack *= 2
-        base_dmg = self.attack
+        base_dmg = 10
         final_dmg, is_crit = self.calculate_damage(base_dmg)
 
         if is_crit:
@@ -1205,7 +1222,6 @@ class MainGame:
     MASTER_ITEMS = {
     "healing potion": {"name": "Healing Potion", "type": "hp", "value": 30},
     "mana potion": {"name": "Mana Potion", "type": "mana", "value": 20},
-    "elixir of life": {"name": "Elixir of Life", "type": "hp", "value": 100},
     "mysterious gem": {"name": "Mysterious Gem", "type": "quest", "value": 0}
     }
 
@@ -1225,8 +1241,8 @@ class MainGame:
     GoblinChiefBartholomewThrockmorton = Boss("Goblin Chief Bartholomew Throckmorton", 150, 10, 50)
 
     def creepy_print(text, min_speed=0.05, max_speed=0.25):
-        #Prints text character by character with erratic delays and 
-        #occasional subtle capitalization glitches to feel unsettling.
+        # Prints text character by character with erratic delays and 
+        # occasional capitalization glitches.
         for char in text:
             # 10% chance to glitch uppercase a letter
             if char.isalpha() and random.random() < 0.10:
@@ -1236,10 +1252,10 @@ class MainGame:
             
             sys.stdout.flush()
         
-            # Erratic timing, simulates heavy breathing or hesitation
+            # Erratic timing
             delay = random.uniform(min_speed, max_speed)
         
-            # Introduce a long, dramatic pause on punctuation
+            # Introduces a long, dramatic pause on punctuation
             if char in ['.', '!', '?', '...']:
                 delay += 0.8
             
@@ -1366,7 +1382,7 @@ class MainGame:
     input("\nPress [ENTER] to begin your adventure...")
     print("\n") # Clear some space
     
-    # ... rest of your game loop start code ...
+    # Chooses the player's name and class
     print ("\nWhat is your hero's name?")
     player_name = input("Enter name: ").strip()
     print("\nWhich class would you like to play as?")
@@ -1387,8 +1403,8 @@ class MainGame:
         "Skills: Wild Shape, Feral Strike, Nature's Scorn.",
         "Trait: 'Wild Shape' (Gains various buffs depending on which animal form is chosen via skill usage. Bear: increased health, Hawk: increased critical chance, Jaguar: increased attack. Additionally, gain an extra turn.)",
         "---",
-        "PALADIN: You are the protector, a holy knight who fights for the innocent and smites the wicked. However, the road to rightousness is not without its trials, and in the face of horrible truths, many paladins have abandoned their oaths.",
-        "Skills: Divine Smite, Holy Light, Circle of the Righteous.",
+        "PALADIN: You are the protector, a holy knight who fights for the innocent and smites the wicked. However, the road to rightousness is not without its trials, and in the face of horrible truths, 'tis not uncommon for even the bravest to falter.",
+        "Skills: Divine Smite, Holy Supplication, Circle of the Righteous.",
         "---",
         "MONK: A monk knows that there can be no greater weapon than the human body, and you seek to unlock your potential through rigorous training and meditation.",
         "Skills: Flurry of Blows, Meditation, Dragon's Breath.",
@@ -1403,14 +1419,14 @@ class MainGame:
         "Skills: Weak Entropy, Crush, Spatial Cleave.",
         "---",
         "LIGHTWEAVER: Most assume light is an intangible substance, while you and your fellow Weavers have learned how to shape it into the perfect tool for any combat situation.",
-        "Skills: Ethereal Blade, Light's Blessing.",
+        "Skills: Ethereal Blade, Light's Blessing, Halo of Mirrors.",
         "Trait: 'Reflection' (If you parry an attack, the damage will be reflected back onto the enemey. If the parry was normal, then only half damage will be reflected.)."
     ]
 
-    # 2. Print the formatted box
+    # Prints the formatted box
     print_boxed_message("CHOOSE YOUR CHARACTER CLASS", class_menu_text)
 
-    # 3. Prompt for input directly under the box
+    # Prompts for input directly under the box
     player_class = input("\nEnter your choice: ").strip().upper()
 
     while player_class not in ['WARRIOR', 'MAGE', 'ROGUE', 'DRUID', 'PALADIN', 'MONK', 'BARD', 'MARKSMAN', 'FUNDAMENTALIST', 'LIGHTWEAVER']:
@@ -1440,7 +1456,7 @@ class MainGame:
 
     merchant_shop = Shop()
 
-    #Describes the room, including the items and characters
+    # Describes the room, including the items and characters
     while True:
         room = zone_map[player.current_room]
         print ("\n-----------------------------")
@@ -1659,7 +1675,7 @@ class MainGame:
                         time.sleep(2)
                         print("\n")
 
-                        # Creepy text when gem is picked up, cliffhanger to get people hyped for new updates (if anyone ever plays this thing lol)
+                        # Creepy text when gem is picked up, cliffhanger to get people hyped for later updates
                         audio.play_event_music("unknown_voice")
                         creepy_print(f"{Fore.RED}Oh. What's this? Hello there. And who might you be?{Style.RESET_ALL}")
                         time.sleep(2)
