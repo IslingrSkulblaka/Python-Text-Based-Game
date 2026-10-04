@@ -1,0 +1,124 @@
+[
+  {
+    "Terry the bartender": {
+      "start": {
+        "speaker": "Terry the bartender",
+        "text": "Welcome to my tavern! Care for a drink? We got ale for 5 gold!",
+        "options": [
+          { "text": "Yes, please!", "next_node_id": "drink_yes" },
+          { "text": "No, thank you.", "next_node_id": "drink_no" },
+          { "text": "Can you tell me about this town?", "next_node_id": "town_info" },
+          { "text": "Do you have any quests for me?", "next_node_id": "check_quest_status"}
+        ]
+      },
+      "drink_yes": {
+        "speaker": "Terry the bartender",
+        "text": "That'll be 5 gold coins. Enjoy your ale!",
+        "options": []
+      },
+      "drink_no": {
+        "speaker": "Terry the bartender",
+        "text": "Alright, maybe next time.",
+        "options": []
+      },
+      "drink_free": {
+        "speaker": "Terry the bartender",
+        "text": "*Terry winks and slides a cold mug over* Put your coins away, hero! After handling Throckmorton, your gold is no good here. This one's on the house!",
+        "options": []
+      },
+      "drink_no_gold": {
+        "speaker": "Terry the bartender",
+        "text": "I run a tavern, friend, not a charity. Come back when you've got 5 gold coins!",
+        "options": []
+      },
+      "town_info": {
+        "speaker": "Terry the bartender",
+        "text": "*His face falls slightly* Well, we used to be a thriving trading village, but things changed. Goblins moved into the Dark Forest to the north. No one dares venture there anymore. It used to be an old hunting trail that led to the mountains, and was how we became heavy-hitters in the leather-making trade.",
+        "options": []
+      },
+      "quest_not_started": {
+        "speaker": "Terry the bartender",
+        "text": "Well, now that you mention it, I might have something for you... There's a goblin problem up in the Dark Forest, if you're interested. If you manage to clear the pests out, I'll make it worth your while! So, what do you say?",
+        "options": [
+          { "text": "Yes, I'll take care of the goblins!", "next_node_id": "quest_yes" },
+          { "text": "No, that's too dangerous for me.", "next_node_id": "quest_no" }
+        ]
+      },
+      "quest_yes": {
+        "speaker": "Terry the bartender",
+        "text": "*Terry lets out a jovial laugh* Excellent! After you leave the tavern, just head north to find the Dark Forest. Good luck!",
+        "options": []
+      },
+      "quest_no": {
+        "speaker": "Terry the bartender",
+        "text": "A shame, but I understand. It's a dangerous task. Maybe another time.",
+        "options": []
+      },
+      "quest_active": {
+        "speaker": "Terry the bartender",
+        "text": "Those green pests are still out there causing havoc. Head north and take care of their chief!",
+        "options": []
+      },
+      "quest_reward_turnin": {
+        "speaker": "Terry the bartender",
+        "text": "*Terry lets out a booming laugh* You actually thrashed Throckmorton?! Incredible! Here is your reward, hero. Drinks are on the house tonight!",
+        "options": []
+      },
+      "quest_already_done": {
+        "speaker": "Terry the bartender",
+        "text": "The forest is quiet thanks to you, friend. Enjoying the peace?",
+        "options": []
+      }
+    }
+  },
+  {
+    "John the bard": {
+      "start": {
+        "speaker": "John the bard",
+        "text": "Ah, a fellow traveler! Care for a song?",
+        "options": [
+          { "text": "I would love a good tune!", "next_node_id": "song_yes" },
+          { "text": "No, thank you.", "next_node_id": "song_no" },
+          { "text": "Can you tell me about this town?", "next_node_id": "town_info"}
+        ]
+      },
+      "song_yes": {
+        "speaker": "John the bard",
+        "text": "Ah, you have a good ear for music! *The bard plays a soft melody, letting you feel as though you could accomplish anything!*",
+        "options": []
+      },
+      "song_no": {
+        "speaker": "John the bard",
+        "text": "Woe, yet another rejection. Mayhaps you'll wish for a song another time.",
+        "options": []
+      },
+      "town_info":{
+        "speaker":"John the bard",
+        "text": "*He leans in slightly* Alas, my new friend, I am a humble minstrel, and while I have traveled to many parts of this kingdom, I am but a newcomer to this humble village. However, something does intrigue me: why would goblins come all this way? They rarely move anywhere from their regular haunts, and only if they are driven out. While I am certainly not an expert in goblin behavior, I can't help but feel as though there is something strange afoot.",
+        "options":[]
+      }
+    }
+  },
+  {
+    "Ozzy the shopkeeper":{
+      "start": {
+        "speaker": "Ozzy the shopkeeper",
+        "text": "Welcome, traveler, to my humble shop! Would you like to peruse my stock?",
+        "options": [
+          { "text": "Browse wares.", "next_node_id": "shop_yes" },
+          { "text": "No, thank you.", "next_node_id": "shop_no" }
+        ]
+      },
+      "shop_yes": {
+        "speaker": "Ozzy the shopkeeper",
+        "text": "Let me know if find anything you desire!",
+        "options": []
+      },
+      "shop_no": {
+        "speaker": "Ozzy the shopkeeper",
+        "text": "Ah, can't be helped, feel free to stop in another time!",
+        "options": []
+      }
+    }
+  }
+]

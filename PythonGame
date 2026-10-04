@@ -1,0 +1,1805 @@
+import json
+from threading import Timer
+import tkinter as tk
+from tkinter import messagebox
+import random
+import time
+from inputimeout import inputimeout, TimeoutOccurred
+from dialogue_manager import DialogueManager
+from pygame import mixer
+import os
+import shutil
+import sys
+from colorama import Fore, Style, init
+
+class AudioManager:
+    def __init__(self):
+        # Initialize the pygame mixer
+        mixer.init(frequency=44100)
+        # Track what is currently playing to prevent restarting the same song
+        self.current_track = None
+        
+        # Define paths to music files
+        self.tracks = {
+            "unknown_voice": "audio/unknown.wav"
+        }
+
+    def play_event_music(self, track_key):
+        """Switches music based on game events (like creepy text appearing)."""
+        if track_key not in self.tracks:
+            print(f"[Audio Error] Track key '{track_key}' not found in tracks dictionary.")
+            return
+            
+        # If the requested song is already playing, do nothing
+        if self.current_track == track_key:
+            return
+
+        # Check if the file actually exists on the computer before playing
+        if not os.path.exists(self.tracks[track_key]):
+            print(f"[Audio Error] Missing file for {track_key} at {self.tracks[track_key]}")
+            return
+
+        try:
+            # Fade out the current song over 1000 milliseconds (1 second)
+            mixer.music.fadeout(2000)
+            
+            # Load and play the new track
+            mixer.music.load(self.tracks[track_key])
+            # loops=-1 means the track will loop infinitely until stopped
+            mixer.music.play(loops=-1, fade_ms=2000) 
+            
+            self.current_track = track_key
+        except Exception as e:
+            print(f"[Audio Error] Could not play music: {e}")
+
+    def stop_music(self, fade_ms=1500):
+        # Smoothly fades out and stops whatever music track is currently playing.
+        try:
+            mixer.music.fadeout(fade_ms)
+            self.current_track = None # Reset tracker so the same track can be re-triggered later
+        except Exception as e:
+            print(f"[Audio Error] Could not stop music: {e}")
+
+class Quests:
+    # Holds all of the quest information, including the name, objectives, and rewards
+    def __init__(self, title, description, reward, completed):
+        self.title = title
+        self.description = description
+        self.reward = reward
+        self.status = "not_started"
+
+    def complete_quest(self, player):
+        self.status = "turned_in"
+
+        # Parse out gold reward string if necessary, or just hardcode tracking:
+        print(f"\nQuest '{self.title}' turned in! You earned {self.reward}.")
+
+class DialogueOption:
+    # A single choice the player can pick.
+    def __init__(self, text, next_node_id):
+        self.text = text  # What the button or choice says
+        self.next_node_id = next_node_id  # Where this choice leads
+
+
+class DialogueNode:
+    # A single block of conversation.
+    def __init__(self, node_id, speaker, text, options=None):
+        self.node_id = node_id  # Unique ID for the node
+        self.speaker = speaker  # Name of the character talking
+        self.text = text  # The dialogue line spoken
+        self.options = options if options is not None else []
+
+class Combatant:
+    def __init__(self, name: str, hp: int, attack: int, mana: int, crit_chance: float = 0.10, crit_damage: float = 1.5):
+        self.name = name
+        self.hp = hp
+        self.attack = attack
+        self.mana = mana
+        self.crit_chance = crit_chance
+        self.crit_damage = crit_damage
+        self.statuses = {}
+
+    #Crit calculation method
+    def calculate_damage(self, base_damage: int) -> tuple[int, bool]:
+        #Calculates final damage and returns (damage_amount, is_crit).
+        is_crit = random.random() < self.crit_chance
+        if is_crit:
+            final_damage = int(base_damage * self.crit_damage)
+            return final_damage, True
+        return base_damage, False
+
+class Player(Combatant):
+    def __init__(self, name: str, hp: int, attack: int, mana: int, crit_chance: float = 0.10, crit_damage: float = 1.5):
+        self.name = name
+        self.hp = hp
+        self.max_hp = hp
+        self.mana = mana
+        self.max_mana = mana
+        self.attack = attack
+        self.crit_chance = crit_chance
+        self.crit_damage = crit_damage
+        self.inventory = [
+            {"name": "Healing Potion", "type": "hp", "value": 30, "qty": 3},
+            {"name": "Mana Potion", "type": "mana", "value": 20, "qty": 2}
+        ]
+        self.abilities = {}
+        self.statuses = {}
+        self.buffs = {}
+        self.quests = {}
+        self.gold = 20  # Starting gold currency
+        self.current_room = 'Town Square'
+
+    def take_turn(self, enemies):
+        # Displays available abilities and processes user choice.
+            
+        # Filter to make sure it only target enemies that have HP left
+        live_enemies = [e for e in enemies if e.hp > 0]
+        if not live_enemies:
+            return "victory"
+            
+        print(f"\n--- It is {self.name}'s turn! ---")
+        print(f"HP: {self.hp}/{self.max_hp} | Mana: {self.mana}/{self.max_mana}")
+
+        while True:
+
+            # Main Action Menu
+            print("\nWhat would you like to do?")
+            print("[1] Basic Attack")
+            print("[2] Use Ability")
+            print("[3] Use Potion")
+            print("[4] Flee")
+            
+            try:
+                action_choice = int(input("Select (1-4): "))
+            
+                #Option 1: Basic attack
+                if action_choice == 1:
+                    target = self._select_target(live_enemies)
+                    # Simple attack logic; handles crit based on stats
+                    damage = self.attack
+                    import random
+                    if random.random() < self.crit_chance:
+                        damage = int(damage * self.crit_damage)
+                        print(f"\nCRITICAL HIT!")
+                    
+                    target.hp = max(0, target.hp - damage)
+                    print(f"{self.name} attacks {target.name} for {damage} damage!")
+                    if damage > target.hp:
+                        print(f"\n{target.name} is killed!")
+                    return "continue"
+
+                #Option 2: Use abilities
+                elif action_choice == 2:
+                    if not self.abilities:
+                        print("You don't know any abilities yet!")
+                        continue
+                        
+                    ability_list = list(self.abilities.keys())
+                    print("\n--- Choose an ability ---")
+                    for idx, name in enumerate(ability_list, start=1):
+                        print(f"[{idx}] {name} (Costs {self.abilities[name]['cost']} Mana)")
+                    print(f"[{len(ability_list) + 1}] Back")
+                    
+                    sub_choice = int(input(f"Select (1-{len(ability_list) + 1}): "))
+                    if sub_choice == len(ability_list) + 1:
+                        continue # Go back to main loop
+                        
+                    if 1 <= sub_choice <= len(ability_list):
+                        chosen_ability_name = ability_list[sub_choice - 1]
+                        ability_data = self.abilities[chosen_ability_name]
+                        
+                        if self.mana >= ability_data["cost"]:
+                            self.mana -= ability_data["cost"]
+
+                            # Intelligent targeting and forwarding results
+                            # Check if the ability is labeled an AoE, Heal, or Buff
+                            is_aoe = ability_data.get("is_aoe", False)
+                            is_heal = ability_data.get("is_heal", False)
+                            is_buff = ability_data.get("is_buff", False)
+                            
+                            if is_aoe:
+                                # For AoE, pass live_enemies or None (doesn't matter) and bypass the targeting prompt
+                                return ability_data["func"](live_enemies)
+                            elif is_heal:
+                                return ability_data["func"](self)
+                            elif is_buff:
+                                return ability_data["func"](self)
+                            else:
+                                # For single target, run the targeting menu prompt normally
+                                target = self._select_target(live_enemies)
+                                # Pass the target AND return the result so Combat can see if it's "single" or "aoe"
+                                return ability_data["func"](target)
+                        else:
+                            print(f"Not enough mana! You need {ability_data['cost']}.")
+                            continue
+
+                #Option 3: Use potions
+                elif action_choice == 3:
+                    # Filter items to show only things we actually have in stock
+                    available_items = [item for item in self.inventory if item["qty"] > 0]
+                    if not available_items:
+                        print("Your inventory is empty!")
+                        continue
+                        
+                    print("\n--- Choose an item ---")
+                    for idx, item in enumerate(available_items, start=1):
+                        print(f"[{idx}] {item['name']} x{item['qty']} (Restores {item['value']} {item['type'].upper()})")
+                    print(f"[{len(available_items) + 1}] Back")
+                    
+                    sub_choice = int(input(f"Select (1-{len(available_items) + 1}): "))
+                    if sub_choice == len(available_items) + 1:
+                        continue # Go back to main loop
+                        
+                    if 1 <= sub_choice <= len(available_items):
+                        chosen_item = available_items[sub_choice - 1]
+                        chosen_item["qty"] -= 1 # Deduct quantity
+
+                        #HP potion logic
+                        if chosen_item["type"] == "hp":
+                            if self.hp >= self.max_hp:
+                                print(f"Your HP is already full!")
+                                continue # Send back to item menu without consuming potion
+                
+                            old_hp = self.hp
+                            self.hp = min(self.max_hp, self.hp + chosen_item["value"])
+                            actual_healed = self.hp - old_hp
+            
+                            chosen_item["qty"] -= 1 # Only consume if successfully used
+                            print(f"\n{self.name} used a {chosen_item['name']}! Restored {actual_healed} HP (HP: {self.hp}/{self.max_hp}).")
+                            return "continue"
+
+                        #Mana potion logic
+                        elif chosen_item["type"] == "mana":
+                            if self.mana >= self.max_mana:
+                                print(f"Your Mana is already full!")
+                                continue 
+                
+                            old_mana = self.mana
+                            self.mana = min(self.max_mana, self.mana + chosen_item["value"])
+                            actual_restored = self.mana - old_mana
+            
+                            chosen_item["qty"] -= 1 
+                            print(f"\n{self.name} used a {chosen_item['name']}! Restored {actual_restored} Mana (Mana: {self.mana}/{self.max_mana}).")
+                            return "continue"
+
+                # Option 4: Flee
+                elif action_choice == 4:
+                    print(f"{self.name} attempts to flee from battle!")
+                    return "flee"
+                    
+                print("Invalid choice. Try again.")
+            except ValueError:
+                print("Please enter a valid number.")
+
+    def _select_target(self, live_enemies):
+        # Helper method to isolate target selection parsing
+        print("\nSelect a target:")
+        for idx, enemy in enumerate(live_enemies, start=1):
+            print(f"[{idx}] {enemy.name} (HP: {enemy.hp})")
+
+        while True:
+            try:
+                target_choice = int(input(f"Select Target (1-{len(live_enemies)}): "))
+                if 1 <= target_choice <= len(live_enemies):
+                    return live_enemies[target_choice - 1]
+                print("Invalid target number. Try again.")
+            except ValueError:
+                print("Please enter a valid number.")
+
+class Boss(Combatant):
+    def __init__(self, name: str, hp: int, attack: int, mana: int, crit_chance: float = 0.15, crit_damage: float = 2.0):
+        super().__init__(name, hp, attack, mana, crit_chance, crit_damage)
+        self.max_hp = hp
+        self.phase_two_triggered = False
+        self.ultimate_cooldown = 0  # Number of turns before it can use its big move again
+
+    def take_turn(self, player):
+        # Determines the boss's actions dynamically based on its health or cooldowns.        
+        # Phase 2 Transformation Logic
+        if self.hp <= (self.max_hp * 0.4) and not self.phase_two_triggered:
+            self.phase_two_triggered = True
+            self.attack = int(self.attack * 1.5)  # Enrage: Increases attack power
+            print(f"\n{self.name} becomes enraged! Their attack power increases drastically!")
+            time.sleep(2)
+
+        # Lower cooldowns if any are active
+        if self.ultimate_cooldown > 0:
+            self.ultimate_cooldown -= 1
+
+        # AI Decision Making Matrix
+        # Use an ultimate ability if cooldown is ready and condition met
+        if self.phase_two_triggered and self.ultimate_cooldown == 0:
+            self.ultimate_cooldown = 3  # 3 turn cooldown
+            return self.use_ultimate(player)
+            
+        # Default: Normal Attack
+        return self.use_club_swing()
+
+    def use_club_swing(self):
+        # Calculates standard boss swipe damage
+        damage, is_crit = self.calculate_damage(30)
+        action_name = "Smash" if is_crit else "Swipe"
+        
+        if is_crit:
+            print(f"WARNING! {self.name} is unleashing a massive {action_name} for 30 damage!")
+            time.sleep(1)
+        else:
+            print(f"{self.name} lunges forward with a {action_name} for 30 damage!")
+            time.sleep(1)
+            
+        return damage
+
+    def use_ultimate(self, player=None):
+        # A heavy ultimate attack that deals extreme damage, and will either kill the player outright or leave the with low health if not parried
+        base_ult_damage = 100
+        #damage, is_crit = self.calculate_damage(base_ult_damage)
+        
+        print(f"CRITICAL WARNING! {self.name} slams their club into the ground, causing 'Earthquake' for {base_ult_damage} damage!")
+        time.sleep(1)
+        return base_ult_damage
+
+class Combat:        
+    def __init__(self, player, enemies):
+        self.player = player
+        self.enemies = enemies
+        self.combatants = [player] + enemies
+
+        print("\nRolling Initiative...")
+        rolls = {}
+        for c in self.combatants:
+            roll = random.randint(1, 20)
+            rolls[c] = roll
+            print(f" - {c.name} rolled a {roll}!")
+            
+        self.initiative_order = sorted(self.combatants, key=lambda c: rolls[c], reverse=True)
+        self.current_turn_index = 0
+        time.sleep(1)
+
+    def next_turn(self):
+        if self.current_turn_index >= len(self.initiative_order):
+            self.current_turn_index = 0
+        current_combatant = self.initiative_order[self.current_turn_index]
+        self.current_turn_index += 1
+        return current_combatant
+
+    def start_battle_loop(self):
+        print("\nCOMBAT HAS BEGUN!")
+        
+        while True:
+            # Check if all enemies are defeated
+            live_enemies = [e for e in self.enemies if e.hp > 0]
+            if not live_enemies:
+                time.sleep(1)
+                print("\nVictory! You defeated all the enemies!")
+                time.sleep(1)
+                return "victory"
+                
+            # Check if player is defeated
+            if self.player.hp <= 0:
+                time.sleep(1)
+                print("\nYou have fallen in battle... Game Over.")
+                time.sleep(1)
+                return "game_over"
+
+            # Get the combatant whose turn it is
+            current = self.next_turn()
+        
+            # If it's a dead enemy, skip their turn
+            if hasattr(current, 'hp') and current.hp <= 0:
+                continue
+
+            # If enemy has status, activate the status effect
+            if hasattr(current, 'statuses'):
+                # Check for Frozen status
+                if current.statuses.get("Frozen", 0) > 0:
+                    print(f"\n{current.name} is frozen solid and skips their turn!")
+                    current.statuses["Frozen"] -= 1  # Reduce duration by 1 turn
+                    
+                    # Clean up the status if it expires
+                    if current.statuses["Frozen"] == 0:
+                        del current.statuses["Frozen"]
+                        print(f"\n{current.name} thawed out!")
+                        
+                    time.sleep(1)
+                    continue  # Skip to the next combatant's turn
+                #Check for Kindle status
+                elif current.statuses.get("Kindle", 0) > 0:
+                    burn_damage = 10
+                    current.hp -= burn_damage
+                    print(f"\n{current.name} takes {burn_damage} burn damage! (HP: {max(0, current.hp)})")
+
+                    # If the burn killed them, immediately skip their action
+                    if current.hp <= 0:
+                        print(f"{current.name} was defeated by Kindle's burn!")
+                        continue
+                    
+                    current.statuses["Kindle"] += 1 # Increase duration so that Kindle lasts as long as enemy is alive
+                    if current.statuses["Kindle"] == 0:
+                        del current.statuses["Kindle"]
+                        print(f"\n{current.name}'s fire went out!")
+                    
+                    time.sleep(1)
+
+                elif current.statuses.get("Shock", 0) > 0:
+                    shocked_damage = 5
+                    current.hp -= shocked_damage
+                    print(f"\n{current.name} takes {shocked_damage} electric damage! (HP: {max(0, current.hp)})")
+
+                    # Immediate death check. If the voltage kills them, stop here
+                    if current.hp <= 0:
+                        print(f"{current.name} dies from the high voltage!")
+                        continue 
+                 
+                    current.statuses["Shock"] -= 1
+
+                    if current.statuses["Shock"] <= 0:
+                        if "Shock" in current.statuses:
+                            del current.statuses["Shock"]
+                        print(f"{current.name} regained control of their limbs!")
+                    
+                    time.sleep(1)
+                    continue
+                elif current.statuses.get("Stun", 0) > 0:
+                    print(f"\n{current.name} is stunned for one turn!")
+                    current.statuses["Stun"] -= 1  # Reduce duration by 1 turn
+                    
+                    # Clean up the status if it expires
+                    if current.statuses["Stun"] == 0:
+                        del current.statuses["Stun"]
+                        print(f"\n{current.name} recovers their wits!")
+                        
+                    time.sleep(1)
+                    continue  # Skip to the next combatant's turn
+
+            if hasattr(current, 'buffs'):
+                if current.buffs.get("Inspiration", 0) > 0:
+                    current.buffs["Inspiration"] -= 1
+                    self.player.mana += 10
+
+                    if current.buffs["Inspiration"] == 0:
+                        self.player.mana -= 20
+                        print(f"\nInspiration has worn off!")
+
+                if current.buffs.get("Meditation", 0) > 0:
+                    current.buffs["Meditation"] -= 1
+
+                    is_self_player = (current == self.player)
+
+                    if is_self_player:
+                        self.player.mana += 10
+
+                # Wild shape buff
+                if "Wild Shape" in current.buffs:
+                    # Get which form the player is currently using
+                    current_form = current.active_form
+
+                    if current_form:
+                        # Apply bonuses dynamically based on the form string
+                        if current_form.lower() == "bear":
+                            bonus_hp = 20
+                            current.hp += bonus_hp
+
+                        elif current_form.lower() == "hawk":
+                            bonus_chance = 0.3
+                            if hasattr(current, 'crit_chance'):
+                                current.crit_chance += bonus_chance
+
+                        elif current_form.lower() == "jaguar":
+                            bonus_attack = 10
+                            if hasattr(current, 'attack'):
+                                current.attack += bonus_attack
+
+                    # Ticks down the buff timer by 1 turn
+                    current.buffs["Wild Shape"] -= 1
+                    
+                    # Only removes stats if the timer hits 0 or less
+                    if current.buffs["Wild Shape"] <= 0:
+                        if current_form:
+                            if current_form.lower() == "bear":
+                                self.player.hp -= 40
+
+                            elif current_form.lower() == "hawk":
+                                if hasattr(current, 'crit_chance'):
+                                    self.player.crit_chance -= 0.6
+
+                            elif current_form.lower() == "jaguar":
+                                if hasattr(current, 'attack'):
+                                    self.player.attack -= 20
+                        
+                        # Cleans up the dictionary and resets the form
+                        del current.buffs["Wild Shape"]
+                        print(f"\n{current.name}'s Wild Shape has expired! Shifting back to normal form.")
+                        time.sleep(1)
+                        current.active_form = None
+
+            # Player Turn
+            if isinstance(current, Player):
+                # Pass the enemies list to the player's choice tracker
+                result = current.take_turn(self.enemies)
+                if result == "flee":
+                    return "flee"       
+                
+                # UNIVERSAL AOE IMPLEMENTATION
+                # If an action returns e.g. ("aoe", 10), apply it to all living targets here
+                elif isinstance(result, tuple) and result[0] == "aoe":
+                    action_type = result[0]
+                    aoe_dmg = result[1] # Extract the numeric damage value from the tuple
+                    status_name = result[2] if len(result) > 2 else None
+                    status_dur = result[3] if len(result) > 3 else 0
+                    for enemy in live_enemies:
+                        enemy.hp = max(0, enemy.hp - aoe_dmg)
+                        print()
+                        print(f"{enemy.name} takes {aoe_dmg} AoE damage! (HP: {enemy.hp})")
+
+                        # Inflict the status on every live enemy
+                        if status_name and hasattr(enemy, 'statuses'):
+                            enemy.statuses[status_name] = status_dur
+                            print(f"{enemy.name} is afflicted with {status_name} for {status_dur} turns!")
+
+                        # CHECK DEATH FROM AOE ACTIONS
+                        if enemy.hp <= 0:
+                            print(f"{enemy.name} is killed!")
+                    time.sleep(1)
+                
+                elif isinstance(result, tuple) and result[0] == "single":
+                    single_dmg = result[1]
+                    target_enemy = result[2]
+                    
+                    # PRINT SINGLE TARGET DAMAGE FROM CLASS ABILITY
+                    target_enemy.hp = max(0, target_enemy.hp - single_dmg)
+                    print(f"{target_enemy.name} takes {single_dmg} damage from the skill! (HP: {target_enemy.hp})")
+                    
+                    # CHECK DEATH FROM SINGLE TARGET SKILL
+                    if target_enemy.hp <= 0:
+                        print(f"{target_enemy.name} is killed!")
+                    time.sleep(1)
+
+                # Heal implementation
+                elif isinstance(result, tuple) and result[0] == "heal":
+                    heal_amount = result[1]
+                    # Ensure healing doesn't overshoot their maximum health pool
+                    if hasattr(current, 'max_hp'):
+                        current.hp = min(current.max_hp, current.hp + heal_amount)
+                    else:
+                        current.hp += heal_amount
+                    
+                    print(f"{current.name} heals for {heal_amount} HP! (HP: {current.hp})")
+                    time.sleep(1)
+
+                # Universal buff implementation
+                elif isinstance(result, tuple) and result[0] == "buff":
+                    buff_name = result[1]
+                    buff_duration = result[2]
+                    
+                    if hasattr(current, 'buffs'):
+                        current.buffs[buff_name] = buff_duration
+                        print(f"{current.name} gains the {buff_name} buff for {buff_duration} turns!")
+                        
+                    time.sleep(1)
+
+                    if buff_name == "Wild Shape" and isinstance(current, Player):                        
+                        # Since turn runner already incremented self.current_turn_index,
+                        # stepping it back by 1 forces the engine to target the Player again next turn
+                        if hasattr(self, 'current_turn_index'):
+                            self.current_turn_index -= 1
+
+                # Self block
+                elif isinstance(result, tuple) and result[0] == "self":
+                    pass
+
+                    
+            # Enemy/Boss Turn (Simple automated AI attack)
+            else:
+                if current.hp > 0:
+                    time.sleep(1)
+                    print(f"\n{current.name}'s turn!")
+                    time.sleep(1)
+                    if isinstance(current, Boss):
+                        print()
+                    else:
+                        print(f"{current.name} swings their sword at {self.player.name} for {current.attack} damage!")
+                        time.sleep(1)
+
+                    # QTE Parry Logic Implementation
+                    parry_success = 0 
+                    reflected_damage = 0
+
+                    try:
+                        # Record the precise start time before the prompt appears
+                        start_time = time.time()                       
+                        # 2-second hard time limit to type 'xy'
+                        qte_input = inputimeout(prompt="\nEnter [xy] in 2 seconds to Parry: ", timeout=2)
+    
+                        # Calculate exactly how many seconds the player took to type and hit enter
+                        elapsed_time = time.time() - start_time
+
+                        if qte_input.strip().lower() == "xy":
+                            # Check if they did it in under 1.0 second
+                            if elapsed_time <= 1.0:
+                                parry_success = 2  # Perfect Parry
+                            else:
+                                parry_success = 1  # Normal Parry
+                        else:
+                            print(f"\nWrong buttons! You typed '{qte_input}'.")
+        
+                    except TimeoutOccurred:
+                        print("\nParry failed.")
+                        time.sleep(1)
+
+                    time.sleep(1)
+
+                    # Apply damage and reflection based on QTE success tier
+                    if parry_success == 2:
+                        # If parrired within 1 second, 0 damage
+                        print(f"\nPERFECT PARRY! {self.player.name} perfectly deflected the blow and took 0 damage! ({elapsed_time:.2f}s)")
+                        time.sleep(1)
+    
+                    elif parry_success == 1:
+                        # If parried within 2 seconds, half damage
+                        print(f"\n{self.player.name} Parries {current.name}'s attack and took half damage! ({elapsed_time:.2f}s)")
+                        self.player.hp -= int(current.attack / 2) # Half damage if normal
+                        time.sleep(1)
+
+                    # Handle Lightweaver Class Reflection Mechanics if they passed the QTE
+                    if parry_success > 0:
+                        is_lightweaver = isinstance(self.player, LIGHTWEAVER) or getattr(self.player, 'character_class', '').upper() == "LIGHTWEAVER"
+    
+                        if is_lightweaver:
+                            # Scale reflected damage based on parry tier
+                            if parry_success == 2:
+                                reflected_damage = current.attack  # Full reflection for perfect
+                                print("\nPerfect Parry Bonus: Full damage reflected!")
+                            else:
+                                reflected_damage = int(current.attack / 2)  # Half reflection for normal
+                                current.hp -= reflected_damage
+                                print("\nNormal Parry: Half damage reflected!")
+                                print(f"\n{self.player.name} takes {reflected_damage} damage!")
+                                
+                            self.player.reflection_active = True
+        
+                            print(f"\nReflection Active! {self.player.name} reflects {reflected_damage} damage back to {current.name}!")
+                            print(f"{current.name} now has {max(0, current.hp)} HP.")
+                            time.sleep(1)
+        
+                            # Check if the reflected damage killed the enemy
+                            if current.hp <= 0:
+                                print(f"\n{current.name} was killed by their own attack!")
+                                time.sleep(1)
+                    else:
+                        self.player.hp -= current.attack
+                        print(f"{self.player.name} now has {max(0, self.player.hp)} HP.")
+                        time.sleep(1)
+
+class Shop:
+    def __init__(self):
+        # Catalog of items available to buy, with their stats and gold costs
+        self.catalog = {
+            1: {"name": "Healing Potion", "type": "hp", "value": 30, "cost": 15},
+            2: {"name": "Mana Potion", "type": "mana", "value": 20, "cost": 10},
+        }
+
+    def enter_shop(self, player):
+        print(f"\nWelcome to the Item Shop, {player.name}!")
+        
+        while True:
+            print(f"\nYour Gold: {player.gold}")
+            print("--- Items for Sale ---")
+            
+            # Display items dynamically from catalog
+            for idx, item in self.catalog.items():
+                print(f"[{idx}] {item['name']} - Cost: {item['cost']} Gold (Restores {item['value']} {item['type'].upper()})")
+            
+            exit_idx = len(self.catalog) + 1
+            print(f"[{exit_idx}] Exit Shop")
+
+            try:
+                choice = int(input(f"What would you like to buy? (1-{exit_idx}): "))
+                
+                if choice == exit_idx:
+                    break
+                
+                if choice in self.catalog:
+                    selected_item = self.catalog[choice]
+                    
+                    # Check if the player has enough gold
+                    if player.gold >= selected_item["cost"]:
+                        player.gold -= selected_item["cost"]
+                        
+                        # Add to player's inventory stack or create a new entry
+                        item_found = False
+                        for inv_item in player.inventory:
+                            if inv_item["name"] == selected_item["name"]:
+                                inv_item["qty"] += 1
+                                item_found = True
+                                break
+                        
+                        # If the player didn't already own this item type, add it fresh
+                        if not item_found:
+                            player.inventory.append({
+                                "name": selected_item["name"],
+                                "type": selected_item["type"],
+                                "value": selected_item["value"],
+                                "qty": 1
+                            })
+                            
+                        print(f"You purchased a {selected_item['name']} for {selected_item['cost']} gold!")
+                    else:
+                        print("You don't have enough gold for that item!")
+                else:
+                    print("Invalid option. Please choose from the catalog.")
+                    
+            except ValueError:
+                print("Please enter a valid menu number.")
+
+
+class WARRIOR(Player):
+    def __init__(self, name):
+        super().__init__(name, 120, 10, 20, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Reckless Strike (Deals 30 damage but takes 5 damage)": {"cost": 0, "is_single": True, "func": self.reckless_strike},
+            "Shield Bash (Deals 10 damage and stuns the enemy for 1 turn)": {"cost": 0, "is_single": True, "func": self.shield_bash},
+            "Raging Whirl (Deals 10 damage to all enemies)": {"cost": 0, "is_aoe": True, "func": self.raging_whirl}
+        }
+
+    def reckless_strike(self, target):
+        base_dmg = 30
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+        self.hp = max(0, self.hp - 5) 
+    
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} unleashes their inner fury upon {target.name}!")
+        else:
+            print(f"\n{self.name} roars with rage and uses Reckless Strike on {target.name}!")
+
+        print(f"{self.name} takes 5 recoil damage! (HP: {self.hp})")
+        
+        # Combat handles printing damage/kills automatically now!
+        return ("single", final_dmg, target)
+
+    def shield_bash(self, target):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+        
+        target_enemy = target
+        target_enemy.statuses["Stun"] = 1
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} gives {target.name} a concussion with their shield, dealing {final_dmg} and stunning them for one turn!")
+        else:
+            print(f"\n{self.name} slams their shield into {target.name}, dealing {final_dmg} damage and stunning them for one turn!")
+
+        return ("single", final_dmg, target)
+
+    def raging_whirl(self, live_enemies):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+      
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} spins like a cyclone, delivering a massive blow of {final_dmg} to all enemies!")
+        else:
+            print(f"\n{self.name} swings their axe in a circle, sweeping through the battlefield and doing {final_dmg} to all enemies!")
+        
+        # Return an aoe payload type. The Combat system loop takes care of draining the HP pool.
+        return ("aoe", final_dmg)
+
+
+class MAGE(Player):
+    def __init__(self, name):
+        super().__init__(name, 80, 5, 100, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Fireball (Deals 30 damage and applies Kindle every turn)": {"cost": 20, "is_single": True, "func": self.fireball},
+            "Ice Spike (Deals 20 damage and applies Frozen for one turn)": {"cost": 10, "is_single": True, "func": self.ice_spike},
+            "Lightning Bolts (Deals 10 damage and will Shock all enemies for a random turn)": {"cost": 15, "is_aoe": True, "func": self.lightning_bolts}
+        }
+
+    def fireball(self, target):
+        base_dmg = 30
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        target_enemy = target
+        target_enemy.statuses["Kindle"] = 1
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} calls forth a ball of pure infernal energy on {target.name} for {final_dmg} damage and applies Kindle!")
+        else:
+            print(f"\n{self.name} applies the favored technique of Grand Sage Jocatium and casts Fireball on {target.name} for {final_dmg} damage and applies Kindle!")
+
+        return ("single", final_dmg, target)
+
+    def ice_spike(self, target):
+        base_dmg = 20
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        target_enemy = target
+        target_enemy.statuses["Frozen"] = 1
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} nearly causes a new ice age by casting Ice Spike on {target.name}, which takes {final_dmg} damage and is Frozen!")
+        else:
+            print(f"\n{self.name} utters words that chill the very air and conjure an Ice Spike under {target.name} for {final_dmg} damage and applies Frozen!")
+
+        return ("single", final_dmg, target)
+
+    def lightning_bolts(self, live_enemies):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        random_shock_duration = random.randint(1, 3)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} summons the wrath of the storms and casts Lightning Bolts, all enemies take {final_dmg} damage and receive Shock!")
+        else:
+            print(f"\n{self.name} harnesses static current and casts Lightning Bolt on all enemies, causing them to take {final_dmg} damage and receive Shock!")
+
+        return ("aoe", final_dmg, "Shock", random_shock_duration)
+
+
+class ROGUE(Player):
+    def __init__(self, name):
+        super().__init__(name, 100, 10, 50, crit_chance=0.10, crit_damage=3.0)
+        self.abilities = {
+            "Backstab (Deals 15 attack damage and applies Bleed)": {"cost": 0, "is_single": True, "func": self.backstab},
+            "Dagger Throw (Deals 5 attack damage)": {"cost": 0, "is_single": True, "func": self.dagger_throw},
+            "Firebomb (Deals 10 attack damage to all enemies)": {"cost": 0, "is_aoe": True, "func": self.firebomb}
+        }
+    def backstab(self, target):
+        base_dmg = 15
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+        
+        if is_crit:
+            print(f"\nCRITICAL HIT! A large wound suddenly appears on {target.name}, striking a vital spot and dealing {final_dmg} damage, though they could've sworn {self.name} never moved...")
+        else:
+            print(f"\n{self.name} creaps up on {target.name} and uses Backstab for {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def dagger_throw(self, target):
+        base_dmg = self.attack - 5
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+        
+        if is_crit:
+            print(f"\nCRITICAL HIT!{self.name} lands a 1-in-a-million throw on {target.name}, dealing {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} demonstrates their skill and use Dagger Throw on {target.name} for {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def firebomb(self, live_enemies):
+        base_dmg = self.attack
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} throws bombs kept as a last resort, scorching all enemies and dealing {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} retrieves small hidden bombs from within their cloak and throws them, dealing {final_dmg} damage to all enemies!")
+
+        return ("aoe", final_dmg)
+
+class DRUID(Player):
+        def __init__(self, name):
+            super().__init__(name, 90, 5, 100, crit_chance=0.15, crit_damage=2.0)
+            self.abilities = {
+                "Wild Shape (Turn randomly into either a Bear, Hawk, or Jaguar, with each form providing its own buffs, and gain an extra turn)": {"cost": 5, "is_buff": True, "func": self.wild_shape},
+                "Feral Strike (Strike in your wild form, dealing damage depending on the animal. Bear: 20, Hawk: 10, Jaguar: 15. If no form, then 5 base damage)": {"cost": 5, "is_single": True, "func": self.feral_strike},
+                "Nature's Scorn (Deals 5 damage if not in Wild Shape, else Bear: 20, Hawk: 10, Jaguar: 15 to all enemies)": {"cost": 10, "is_aoe": True, "func": self.natures_scorn}
+            }
+        def wild_shape(self, player):
+            # Defines the possible animal options
+            forms = ["Bear", "Hawk", "Jaguar"]
+        
+            # Picks one completely at random
+            chosen_form = random.choice(forms)
+        
+            # Applys it to character's state
+            self.buffs["Wild Shape"] = 2  # Lasts for 2 turns
+            self.active_form = chosen_form  # Remembers which animal they became
+        
+            # Displays the unique entry text based on the choice
+            if chosen_form == "Bear":
+                print(f"\n{self.name} channels nature and shifts into a Bear! (+20 HP)")
+            elif chosen_form == "Hawk":
+                print(f"\n{self.name} channels nature and shifts into a Hawk! (+0.3% Crit Chance)")
+            elif chosen_form == "Jaguar":
+                print(f"\n{self.name} channels nature and shifts into a Jaguar! (+10 Attack)")
+
+            return("buff", "Wild Shape", 2)
+
+        def feral_strike(self, target):
+            if "Wild Shape" in self.buffs and self.active_form:
+            # Scales base damage specifically based on the form string
+                if self.active_form == "Bear":
+                    base_dmg = 20
+                elif self.active_form == "Hawk":
+                    base_dmg = 10
+                elif self.active_form == "Jaguar":
+                    base_dmg = 15
+            else:
+                # Fallback damage if in human form
+                base_dmg = 5 
+
+            final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+            if is_crit:
+                print(f"\nCRITICAL HIT! {self.name} the raging beast ravages {target.name}, causing them to take {final_dmg} damage!")
+            else:        
+                print(f"\n{self.name} slashes with their altered limbs, causing {target.name} to take {final_dmg} damage.")
+
+            return ("single", final_dmg, target)
+
+        def natures_scorn(self, live_enemies):
+            if "Wild Shape" in self.buffs and self.active_form:
+            # Scales base damage specifically based on the form string
+                if self.active_form == "Bear":
+                    base_dmg = 20
+                elif self.active_form == "Hawk":
+                    base_dmg = 10
+                elif self.active_form == "Jaguar":
+                    base_dmg = 15
+            else:
+                # Fallback damage if in human form
+                base_dmg = 5 
+
+            final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+            if is_crit:
+                print(f"\nCRITICAL HIT! For but a moment, {self.name} gains complete control of the ground beneath all enemies, raising deadly thorns and dealing {final_dmg} damage!")
+            else:        
+                print(f"\n{self.name} Channels the power of growth, causing thorns to rise and bind all enemies! They take {final_dmg} damage.")
+
+            return("aoe", final_dmg)
+
+
+class PALADIN(Player):
+    def __init__(self, name):
+        super().__init__(name, 110, 10, 60, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Divine Smite (Deals 25 damage)": {"cost": 0, "is_single": True, "func": self.divine_smite},
+            "Holy Light (Restores 20 HP)": {"cost": 10, "is_buff": True, "func": self.holy_light},
+            "Circle of the Righteous (Deals 10 damage to all enemies)": {"cost": 0, "is_aoe": True, "func": self.circle_of_the_righteous}
+        }
+    def divine_smite(self, target):
+        base_dmg = 20
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+        
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} reaches their hand to the heavens, then brutally slaps {target.name}, dealing {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} prays for justice against {target.name} and deals {final_dmg} damage!")
+
+        return ("single", final_dmg, target)
+    
+    def holy_light(self,player):
+        gained_hp = 20
+        old_hp = self.hp
+        self.hp = min(self.max_hp, self.hp + gained_hp)
+        actual_healed = self.hp - old_hp
+            
+        print(f"\n{self.name} bathes in holy light and recovers {actual_healed} HP!")
+
+        return("heal", actual_healed)
+
+    def circle_of_the_righteous(self, live_enemies):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+      
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} spins like a cyclone, delivering a massive blow of {final_dmg} to all enemies!")
+        else:
+            print(f"\n{self.name} raises their sword to the heavens and calls down a rain of swords, dealing {final_dmg} to all enemies!")
+        
+        return ("aoe", final_dmg)
+
+
+class MONK(Player):
+    def __init__(self, name):
+        super().__init__(name, 100, 10, 50, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Flurry of Blows (Deals 10 damage)": {"cost": 5, "is_single": True, "func": self.flurry_of_blows},
+            "Meditation (Restores 10 Mana)": {"cost": 0, "is_buff": True, "func": self.meditation},
+            "Dragon's Breath (Deals 10 damage to all enemies, applies Kindle on critial hit)": {"cost": 15, "is_aoe": True, "func": self.dragons_breath}
+        }
+    def flurry_of_blows(self, target):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name}'s afterimages strike relentlessly at {target.name}, causing them to take {final_dmg} damage!")
+        else:                    
+            print(f"\n{self.name} strikes with lightning speed! {target.name} takes {final_dmg} damage.")
+
+        return("single", final_dmg, target)
+    
+    def meditation(self, player):
+        self.buffs["Meditation"] = 1
+
+        print(f"\n{self.name} focuses their breathing, restoring 10 Mana.")
+
+        return("buff", "Meditation", 1)
+
+    def dragons_breath(self, live_enemies):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+      
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} for but an instant, your spirit resonates with the power of a dragon. All enemies take {final_dmg} damage and are affected with Kindle!")
+            return ("aoe", final_dmg, "Kindle", 1)
+        else:
+            print(f"\n{self.name} inhales deeply, then exhales a cone of fire energy, all enemies take {final_dmg} damage!")
+            return ("aoe", final_dmg)
+
+class BARD(Player):
+    def __init__(self, name):
+        super().__init__(name, 75, 5, 80, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Vicious Mockery (Deals 10-20 damage) ": {"cost": 5, "is_single": True, "func": self.vicious_mockery},
+            "Inspiration (Increases your attack by 10 for 2 turns)": {"cost": 10, "is_buff": True,"func": self.inspiration},
+            "Synaptic Static (Deals 10-15 damage to all enemies)": {"cost": 5, "is_aoe": True, "func": self.synaptic_static}
+        }
+
+    def vicious_mockery(self, target):
+        random_mocking = random.randint(10, 20)
+        base_dmg = random_mocking
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} declares, 'Thy mother containth such girth, the Church hath refused her entrance into Saints' feast!', making {target.name} recoil and take {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} yells something at {target.name} so profaned that it causes them to take {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def inspiration(self, player):
+        self.buffs["Inspiration"] = 2
+
+        print(f"\n{self.name} gains inspiration through song, increasing their attack by 10 for 2 turns!")
+
+        return("buff", "Inspiration", 2)
+
+    def synaptic_static(self, live_enemies):
+        random_static = random.randint(10, 15)
+        base_dmg = random_static
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} plays the absolute antithesis of a good melody, causing permanent tinnitus to all enemies for {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} plays a discordant note, making all enemies take {final_dmg} damage!")
+
+        return ("aoe", final_dmg)
+
+class MARKSMAN(Player):
+    def __init__(self, name):
+        super().__init__(name, 85, 10, 30, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Precise Shot (Deals 15 damage)": {"cost": 5, "is_single": True, "func": self.precise_shot},
+            "Trap Setting (Deals 10 damage)": {"cost": 0, "is_single": True, "func": self.trap_setting},
+            "Shotgun Burst (Deals 10 damage to all enemies)": {"cost": 0, "is_single": True, "func": self.shotgun_burst}
+        }
+    def precise_shot(self, target):
+        base_dmg = 15
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+                
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} raises their rifle, declares 'Tally ho lads!', and blows a hole through {target.name} for {final_dmg} damage")
+        else:
+            print(f"\n{self.name} infuses their musket with magic and fires, shooting {target.name} for {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def trap_setting(self, target):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! Somehow, {self.name} plants a wicked, and rusty, bear trap underneath {target.name}, causing them to take {final_dmg} damage!")
+        else:
+            print(f"\n{target.name} steps on a steel trap and takes {final_dmg} damage.")
+
+        return ("single", final_dmg, target)
+
+    def shotgun_burst(self, live_enemies):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} takes 'spray and pray' to another level, dealing {final_dmg} damage to all enemies!")
+        else:
+            print(f"\n{self.name} takes aim and fires their shotgun, hitting all enemies in front of them for {final_dmg} damage!")
+
+        return("aoe", final_dmg)
+
+class FUNDAMENTALIST(Player):
+    def __init__(self, name):
+        super().__init__(name, 75, 5, 120, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Weak Entropy (Deals 22 damage)": {"cost": 20, "is_single": True, "func": self.weak_entropy},
+            "Crush (Deals 15 damage)": {"cost": 15, "is_single": True, "func": self.crush},
+            "Spacial Cleave (Deals 10 damage to all enemies)": {"cost": 25, "is_aoe": True, "func": self.spatial_cleave}
+        }
+    def weak_entropy(self, target):
+        base_dmg = 22
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {target.name} stumbles, feeling as though their very life-force has been slightly dimmed, taking {final_dmg} damage!")
+        else:                    
+            print(f"\n{self.name} causes {target.name} to experience cellular decay for {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def crush(self, target):
+        base_dmg = 15
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {target.name} sees the air warp around them, before they feel as though a massive weight presses down upon them, causing {final_dmg} damage!")
+        else:
+            print(f"{self.name} increases gravity for {target.name}, causing them to take {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def spatial_cleave(self, live_enemies):
+        base_dmg = 10
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} holds two fingers out and chants in a low voice, causing a rip in the fabric of reality to dismantle all enemies for {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} creates a long vacuum in space, causing all enemies standing near it to take {final_dmg} damage!")
+
+        return("aoe", final_dmg)
+
+class LIGHTWEAVER(Player):
+    def __init__(self, name):
+        super().__init__(name, 85, 5, 80, crit_chance=0.15, crit_damage=2.0)
+        self.abilities = {
+            "Etherial Blade (Deals 15 damage)": {"cost": 15, "is_single": True, "func": self.etherial_blade},
+            "Light's Radiance (Deals 5 damage and stuns target for 2 turns)": {"cost": 10, "is_single": True, "func": self.lights_radiance},
+            "Halo of Mirrors (Deals 10 damage to all enemies)": {"cost": 15, "is_aoe": True, "func": self.halo_of_mirrors}
+        }
+        self.reflection_active = False 
+
+    def etherial_blade(self, target):
+        base_dmg = 15
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} used Etherial Blade and dealt {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} used Etherial Blade and dealt {final_dmg} damage!")
+
+        return("single", final_dmg, target)
+
+    def lights_radiance(self, target):
+        base_dmg = 15
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+        
+        target_enemy = target
+        target_enemy.statuses["Stun"] = 2
+
+        if is_crit:
+            print(f"\nCRITICAL HIT!")
+        else:
+            print(f"\n{self.name} releases their inner light, blinding and Stunning {target.name} for 2 turns!")
+
+        return("single", final_dmg, target)
+
+
+    def halo_of_mirrors(self, live_enemies):
+        self.attack *= 2
+        base_dmg = self.attack
+        final_dmg, is_crit = self.calculate_damage(base_dmg)
+
+        if is_crit:
+            print(f"\nCRITICAL HIT! {self.name} weaves an intricate pattern of crystal light, wrapping around all enemies and dealing {final_dmg} damage!")
+        else:
+            print(f"\n{self.name} creates shards of reflective light that strike all enemies and dealt {final_dmg} damage!")
+
+        return ("aoe", final_dmg)
+
+class MainGame:
+
+    dialogue_system = DialogueManager()
+
+    audio = AudioManager()
+
+    inventory = []
+
+    MASTER_ITEMS = {
+    "healing potion": {"name": "Healing Potion", "type": "hp", "value": 30},
+    "mana potion": {"name": "Mana Potion", "type": "mana", "value": 20},
+    "elixir of life": {"name": "Elixir of Life", "type": "hp", "value": 100},
+    "mysterious gem": {"name": "Mysterious Gem", "type": "quest", "value": 0}
+    }
+
+    current_room = 'Town Square'
+
+    d4 = random.randint(1, 4)
+    d6 = random.randint(1, 6)
+    d8 = random.randint(1, 8)
+    d10 = random.randint(1, 10)
+    d12 = random.randint(1, 12)
+    d20 = random.randint(1, 20)
+
+    Goblin1 = Combatant("Goblin 1", 50, 10, 20)
+    Goblin2 = Combatant("Goblin 2", 50, 10, 20)
+    Goblin3 = Combatant("Goblin 3", 50, 10, 20)
+
+    GoblinChiefBartholomewThrockmorton = Boss("Goblin Chief Bartholomew Throckmorton", 150, 10, 50)
+
+    def creepy_print(text, min_speed=0.05, max_speed=0.25):
+        #Prints text character by character with erratic delays and 
+        #occasional subtle capitalization glitches to feel unsettling.
+        for char in text:
+            # 10% chance to glitch uppercase a letter
+            if char.isalpha() and random.random() < 0.10:
+                sys.stdout.write(char.upper())
+            else:
+                sys.stdout.write(char)
+            
+            sys.stdout.flush()
+        
+            # Erratic timing, simulates heavy breathing or hesitation
+            delay = random.uniform(min_speed, max_speed)
+        
+            # Introduce a long, dramatic pause on punctuation
+            if char in ['.', '!', '?', '...']:
+                delay += 0.8
+            
+            time.sleep(delay)
+
+    zone_map = {
+    'Town Square': {
+        'description': 'You are in the center of a quiet town. The sun is shining, and the townsfolk are going about their daily business. You see a path leading north into a dark forest, a shop to the east, a tavern to the west, and the town gate to the south.',
+        'north': 'Dark Forest',
+        'east': 'Shop',
+        'west': 'Tavern',
+        'south': 'Town Gate',
+        'item': None,
+        'characters': None,
+        'enemies': None
+    },
+    'Dark Forest': {
+        'description': 'A once foreboding location due to a Goblin infestation, now restored to a regular hunting trail.',
+        'south': 'Town Square',
+        'item': 'Mysterious Gem',
+        'characters': None,
+        'enemies': [Goblin1, Goblin2, Goblin3, GoblinChiefBartholomewThrockmorton],
+        'boss_defeated': False
+    },
+    'Tavern': {
+        'description': 'A warm and cozy tavern. The smell of ale fills the air. A bard is playing a lute in the corner. Tables are filled with townsfolk resting after a hard day of work. The bartender greets you with a smile.',
+        'east': 'Town Square',
+        'item': 'Healing Potion',
+        'characters': ['Terry the bartender', 'John the bard', 'Villager 1', 'Villager 2']
+    },
+    'Shop': {
+        'description': 'A small shop with various items for sale. The counter is lined with potions, scrolls, and adventuring gear. The shopkeeper greets you warmly.',
+        'west': 'Town Square',
+        'item': None,
+        'characters': ['Ozzy the shopkeeper']
+    },
+    'Town Gate': {
+        'description': 'A large gate that leads out of the town. Due to an increase in goblin sightings, it is locked and guarded. The guards eye you suspiciously as you approach.',
+        'north': 'Town Square',
+        'item': None,
+        'characters': ['Town Guard 1', 'Town Guard 2'],
+    }
+    }
+
+    # This creates a box for the tutorial of the game's combat system
+    def print_boxed_message(title, lines, border_char="-", corner_char="+"):
+        try:
+            terminal_width = shutil.get_terminal_size((80, 20)).columns
+        except Exception:
+            terminal_width = 80
+        
+        max_box_width = min(76, terminal_width - 4)
+    
+        # Process text wrapping
+        processed_lines = []
+        for line in lines:
+            if line == "---":
+                processed_lines.append("---")
+                continue
+            if len(line) <= max_box_width:
+                processed_lines.append(line)
+            else:
+                words = line.split(' ')
+                current_line = ""
+                for word in words:
+                    if len(current_line) + len(word) + 1 <= max_box_width:
+                        current_line += (word + " ")
+                    else:
+                        processed_lines.append(current_line.rstrip())
+                        current_line = word + " "
+                if current_line:
+                    processed_lines.append(current_line.rstrip())
+
+        # Calculate widths
+        content_width = max(len(line) for line in processed_lines if line != "---")
+        content_width = max(content_width, len(title))
+        box_width = content_width + 4
+
+        # Print Top Header
+        title_str = f" {title} " if title else ""
+        remaining_space = box_width - len(title_str) - 2
+        left_padding = remaining_space // 2
+        right_padding = remaining_space - left_padding
+        print(corner_char + (border_char * left_padding) + title_str + (border_char * right_padding) + corner_char)
+        print(f"|{' ' * (box_width - 2)}|")
+    
+        # Print Body Rows
+        for line in processed_lines:
+            if line == "---":
+                # Prints a clean divider inside the box context
+                print(f"|{border_char * (box_width - 2)}|")
+            else:
+                padding_needed = box_width - len(line) - 4
+                print(f"| {line}{' ' * padding_needed} |")
+        
+        print(f"|{' ' * (box_width - 2)}|")
+        print(corner_char + (border_char * (box_width - 2)) + corner_char)
+
+    print ("\nWelcome to the Text Adventure Game! You start your journey in the Town Square. Type 'quit' to exit the game.")
+    time.sleep(2)
+
+    tutorial_title = "COMBAT TUTORIAL"
+    tutorial_text = [
+        "This game is turn-based. When combat starts, you and the enemies will roll for initiative.",
+        "Once turn order is determined, you will get to the point when it is your turn, and will be presented the following options:",
+        "",
+        "",
+        "Basic Attac: Deals physical damage based on your Attack stat.",
+        "Use Ability: Uses Mana to cast powerful spells or heal yourself.",
+        "Use Potion: Opens your inventory to use Potion stacks (HP/Mana).",
+        "Flee: Attempt to escape back to the previous room.",
+        "",
+        "",
+        "Critical hits: Every attack has a chance to deal twice as much damage.",
+        "",
+        "",
+        "When an enemy attacks, you will have the option to parry within a certain time limit, which is inspired in part by Clair-Obscur, Expedition 33's parry system. If you parry within 1 second, you will take no damage from the enemy's attack. If you parry within 2 seconds but outside of 1 second, you will instead negate half of the attack."
+    ]
+    
+    # Print the box
+    print_boxed_message(tutorial_title, tutorial_text)
+    
+    # Wait for the player to press enter so they can read it before the game starts
+    input("\nPress [ENTER] to begin your adventure...")
+    print("\n") # Clear some space
+    
+    # ... rest of your game loop start code ...
+    print ("\nWhat is your hero's name?")
+    player_name = input("Enter name: ").strip()
+    print("\nWhich class would you like to play as?")
+    time.sleep(2)
+    print("\n")
+
+    class_menu_text = [
+        "WARRIOR: A tough and fierce fighter, your strength comes from your inner fury. However, the greatest trait a warrior can possess is patience: without some way to hold your rage in check, it may one day birn the world...",
+        "Skills: Reckless Strike, Shield Bash, Raging Whirl.",
+        "---",
+        "MAGE: A master of the elements, you weave destruction into every attack, specializing in applying status effects to your foes.",
+        "Skills: Fireball, Ice Spike, Lightning Bolts.",
+        "---",
+        "ROGUE: You are a ghost in the dark, never seen, but always feared. Knights are best at fighting goblins, orcs, and the occansional chimera, but you can topple entire knigdoms, without anyone noticing.",
+        "Skills: Backstab, Dagger Throw, Firebomb. Trait: 'Silent but deadly'.",
+        "---",
+        "DRUID: Nature can be both gentle to its creatures and wrathful to intruders. You follows the will of nature and cuts down all unnatural forces that could cause it harm.",
+        "Skills: Wild Shape, Feral Strike, Nature's Scorn.",
+        "Trait: 'Wild Shape' (Gains various buffs depending on which animal form is chosen via skill usage. Bear: increased health, Hawk: increased critical chance, Jaguar: increased attack. Additionally, gain an extra turn.)",
+        "---",
+        "PALADIN: You are the protector, a holy knight who fights for the innocent and smites the wicked. However, the road to rightousness is not without its trials, and in the face of horrible truths, many paladins have abandoned their oaths.",
+        "Skills: Divine Smite, Holy Light, Circle of the Righteous.",
+        "---",
+        "MONK: A monk knows that there can be no greater weapon than the human body, and you seek to unlock your potential through rigorous training and meditation.",
+        "Skills: Flurry of Blows, Meditation, Dragon's Breath.",
+        "---",
+        "BARD: You are a wandering troubadour, never staying in one place, but always leaving an impression. You have an instrument for everything, whether for inspiring yourself in the heat of combat, or when seducing the dragon becomes the only option for survival (at least thats what you tell yourself).",
+        "Skills: Vicious Mockery, Inspiration, Synaptic Static.",
+        "---",
+        "MARKSMAN: 'Why bother with gunpowder and a fancy stick, when a competent battle-mage can set someone on fire?' But why waste all that time and study, when a single well-placed bullet can solve every problem.",
+        "Skills: Precise Shot, Trap Setting, Shotgun Blast.",
+        "---",
+        "FUNDAMENTALIST: While mages pratice in the realm of the elements, you choose to study in the fundamental forces of the univerise. The laws of Electromagnetism, Gravity, Matter, and Entropy are at your command.",
+        "Skills: Weak Entropy, Crush, Spatial Cleave.",
+        "---",
+        "LIGHTWEAVER: Most assume light is an intangible substance, while you and your fellow Weavers have learned how to shape it into the perfect tool for any combat situation.",
+        "Skills: Ethereal Blade, Light's Blessing.",
+        "Trait: 'Reflection' (If you parry an attack, the damage will be reflected back onto the enemey. If the parry was normal, then only half damage will be reflected.)."
+    ]
+
+    # 2. Print the formatted box
+    print_boxed_message("CHOOSE YOUR CHARACTER CLASS", class_menu_text)
+
+    # 3. Prompt for input directly under the box
+    player_class = input("\nEnter your choice: ").strip().upper()
+
+    while player_class not in ['WARRIOR', 'MAGE', 'ROGUE', 'DRUID', 'PALADIN', 'MONK', 'BARD', 'MARKSMAN', 'FUNDAMENTALIST', 'LIGHTWEAVER']:
+        print("Invalid choice. Please select a valid class.")
+        player_class = input("Enter your choice: ").strip().upper()
+
+    if player_class == 'WARRIOR':
+        player = WARRIOR(player_name)
+    elif player_class == 'MAGE':
+        player = MAGE(player_name)
+    elif player_class == 'ROGUE':
+        player = ROGUE(player_name)
+    elif player_class == 'DRUID':
+        player = DRUID(player_name)
+    elif player_class == 'PALADIN':
+        player = PALADIN(player_name)
+    elif player_class == 'MONK':
+        player = MONK(player_name)
+    elif player_class == 'BARD':
+        player = BARD(player_name)
+    elif player_class == 'MARKSMAN':
+        player = MARKSMAN(player_name)
+    elif player_class == 'FUNDAMENTALIST':
+        player = FUNDAMENTALIST(player_name)
+    elif player_class == 'LIGHTWEAVER':
+        player = LIGHTWEAVER(player_name)
+
+    merchant_shop = Shop()
+
+    #Describes the room, including the items and characters
+    while True:
+        room = zone_map[player.current_room]
+        print ("\n-----------------------------")
+        print(f"Location: {player.current_room}")
+        time.sleep(1)
+        print(room['description'])
+        time.sleep(1)
+        if room['item']:
+            print(f"You see a {room['item']} on the ground.")
+            time.sleep(1)
+        if room['characters']:
+            print(f"You see the following characters: {', '.join(room['characters'])}.")
+            time.sleep(1)
+
+        # Menu for general game actions
+        print("\nWhat do you want to do?")
+        print("[1] Go [North], [South], [East], [West]")
+        print("[2] Get [Item]")
+        print("[3] Talk to [character]")
+        print("[4] Quit")
+
+        command = input("\nType in your command: ").strip()
+
+        if not command:
+            continue
+
+        # Splits the command into the action and the specifics of that action
+        command_parts = command.split(maxsplit=1)
+        action = command_parts[0].lower()
+        remaining_text = command_parts[1] if len(command_parts) > 1 else ""
+        
+        # Check for exit
+        if action == 'quit':
+            print("Thanks for playing!")
+            break
+            
+        # Movement logic
+        elif action == 'go':
+            direction = remaining_text.lower()
+            if direction in room:
+                # Determines where the player is trying to go
+                destination = room[direction]
+                quest_name = "Goblin Menace"
+
+                # Gate check: Dark Forest
+                if destination == 'Dark Forest':
+                    has_quest = quest_name in player.quests and player.quests[quest_name].status in ["active", "objective_complete", "completed"]
+                    if not has_quest:
+                        print("\nYou sense a foreboding presence emanating from this path. It would be wise to consult the townsfolk for knowledge before going this way.")
+                        time.sleep(2)
+                        print("\nYou remain in the safety of the Town Square.")
+                        continue # Skip the rest of the movement logic and restart the prompt
+
+                # Gate check: Town Gate
+                elif destination == 'Town Gate':
+                    # Checks of goblin boss is dead, if not then prevent the player from exiting the village
+                    boss_dead = zone_map.get('Dark Forest', {}).get('boss_defeated') == True
+
+                    if not boss_dead:
+                        print("\nA guard lowers his spear, blocking the way: 'Halt, traveler! The main roads are closed.'")
+                        print("'Nobody is being let out until the Goblin Chief in the Dark Forest has been dealt with.'")
+                        time.sleep(2)
+                        print("\nYou remain in the safety of the Town Square.")
+                        continue # Skip the rest of the movement logic and restart the prompt
+
+                # If they pass all checks, their position is updated
+                player.current_room = destination
+                room = zone_map[player.current_room] 
+                time.sleep(1)
+                print(f"\nYou walk to the {direction}.")
+        
+                # Executes Dark Forest encounter if quest is active
+                if player.current_room == 'Dark Forest':
+                    # Check if the forest has already been cleared
+                    if room.get('boss_defeated') == True:
+                        print("\nThe forest path is quiet. The remaining goblin camps have fled.")
+                        time.sleep(1)
+                    else:                        
+                        print("The trees block out most of the light. Cobwebs hang over the path.")
+                        time.sleep(2)
+                        print("An ominous sound, akin to high-pitch laughter, echoes through the trees. You feel a chill down your spine.")
+                        time.sleep(2)
+                        print("Suddenly, three goblins jump out from behind the trees, brandishing their crude weapons! Prepare for combat!")
+                        time.sleep(2)
+
+                        combat = Combat(player, [Goblin1, Goblin2, Goblin3])
+                        battle_result = combat.start_battle_loop()
+
+                        # Checks if player wins the goblin minions encounter before moving on to the boss
+                        if battle_result == "victory":
+                            print("\nYou have felled the goblins!")
+                            time.sleep(2)
+
+                            print("\nHowever, as you begin to celebrate your victory, a loud noise shakes the earth...")
+                            time.sleep(2)
+                            print("\nAnd another...")
+                            time.sleep(2)
+                            print("\nAnd another...")
+                            time.sleep(2)
+                            print("\nUntil a large, brutish form is within sight. Skin a sickly green matching the goblins you just felled,")
+                            print("\nwielding a large club with metal spikes. Seeing its fallen minions, it roars with rage.")
+                            print("\nThis must be the pack's chief, and it hungers for your blood!")
+                            time.sleep(4)
+
+                            # Starts boss encounter
+                            combat = Combat(player, [GoblinChiefBartholomewThrockmorton])
+                            battle_result = combat.start_battle_loop()
+
+                            # Checks if boss is defeated
+                            if battle_result == "victory":
+                                print("\nYou felled the goblin chief! The Dark Forest is peaceful once again!")
+                                # Saves the change to the zone
+                                zone_map['Dark Forest']['boss_defeated'] = True
+
+                                quest_name = "Goblin Menace"
+                                if quest_name in player.quests and player.quests[quest_name].status == "active":
+                                    player.quests[quest_name].status = "objective_complete"
+                                    print("\nQUEST UPDATE: You bested the goblin chieftain! Return to the bartender to claim your reward.")
+                                time.sleep(2)
+
+                            # Checks if player flees like a baby-I mean, makes a tacticul retreat
+                            elif battle_result == "flee":
+                                print("\nYou flee the battle!")
+                                time.sleep(2)
+                                player.hp = player.max_hp
+                                player.mana = player.max_mana
+                                player.current_room = 'Town Square'
+
+                            # Check if skill issue-I mean, if player falls in battle
+                            elif battle_result == "game_over":
+                                print("\nDefeat! You have fallen in battle!")
+                                time.sleep(2)
+                                player.hp = player.max_hp
+                                player.mana = player.max_mana
+                                player.current_room = 'Town Square'
+
+                        elif battle_result == "flee":
+                            print("\nYou flee the battle!")
+                            time.sleep(2)
+                            player.hp = player.max_hp
+                            player.mana = player.max_mana
+                            player.current_room ='Town Square'
+                        elif battle_result == "game_over":
+                            print("\nDefeat! You have fallen in battle!")
+                            time.sleep(2)
+                            player.hp = player.max_hp
+                            player.mana = player.max_mana
+                            player.current_room = 'Town Square'
+                            
+                # Executes Town Gate exit prompt
+                elif player.current_room == 'Town Gate':
+                    print("\nNow with the goblin threat settled, the guards give you a nod of respect, then give the order to open the gate.")
+                    print("You may now journey to the outside world and make a name for yourself!")
+            
+                    while True:
+                        print("\nDo you truly wish to leave the starting area? (Yes / No)")
+                        command = input("Type your choice: ").strip().lower()
+
+                        if command == 'yes':
+                            print("\nYou step through the grand gates and head out into the unknown world... To be continued!")
+                            time.sleep(3)
+                            break 
+                        elif command == 'no':
+                            print("\nYou decide you still have business left here. You step back to the Town Square.")
+                            player.current_room = 'Town Square'
+                            room = zone_map[player.current_room] # Ensures room data updates back
+                            break
+                        else:
+                            print("Invalid choice. Please type 'Yes' or 'No'.")
+            
+                    if command == 'yes':
+                        break # Breaks main game loop to finish the game
+
+            else:
+                # Makes sure player doesn't enter a direction that doesn't exist
+                time.sleep(1)
+                print("You can't go that way!")
+
+        # Item interactions
+        elif action == 'get':
+            target_item = remaining_text.lower() if remaining_text else None
+            room_item_raw = room['item']  # e.g., "Healing Potion" or "Mysterious Gem"
+            room_item_lower = room_item_raw.lower() if room_item_raw else None
+    
+            if room_item_lower and target_item == room_item_lower:
+                # Looks up the item structure from the master catalog
+                if room_item_lower in MASTER_ITEMS:
+                    item_data = MASTER_ITEMS[room_item_lower]
+                    item_found = False
+            
+                    # Checks if player already has this item type stacked
+                    for inv_item in player.inventory:
+                        if inv_item["name"] == item_data["name"]:
+                            inv_item["qty"] += 1
+                            item_found = True
+                            break
+                    
+                    # If the player didn't already own it, add it fresh
+                    if not item_found:
+                        player.inventory.append({
+                            "name": item_data["name"],
+                            "type": item_data["type"],
+                            "value": item_data["value"],
+                            "qty": 1
+                        })
+            
+                    print(f"You picked up the {room_item_raw}!")
+            
+                    # Special interaction check (Note: checked BEFORE clearing the room item)
+                    if room_item_lower == 'mysterious gem':
+                        print("You reach towards the ground to pick up the small, violet-colored stone.")
+                        time.sleep(1)
+                        print("\nIt must have been carried by the chieftannnnan aan nn ......----")
+                        time.sleep(5)
+                        print("\n")
+                        time.sleep(2)
+                        print("\n")
+
+                        # Creepy text when gem is picked up, cliffhanger to get people hyped for new updates (if anyone ever plays this thing lol)
+                        audio.play_event_music("unknown_voice")
+                        creepy_print(f"{Fore.RED}Oh. What's this? Hello there. And who might you be?{Style.RESET_ALL}")
+                        time.sleep(2)
+                        print("\n")
+                        time.sleep(2)
+                        creepy_print(f"{Fore.RED}Pleasure to meet you, EEEee$nt$@It@&ycAA*@aaau@*@SSeFR2@*eeed@*$OOmm-{Style.RESET_ALL}")
+                        creepy_print(player_name)
+                        creepy_print(f"{Fore.RED}!{Style.RESET_ALL}")
+                        print("\n")
+                        time.sleep(2)
+                        creepy_print(f"{Fore.RED}Don't worry, I'm a ffFRRRRREe^^^@@(@nmAAAllYy*(*(^SALvAT%^*iONNnnNN-friend!{Style.RESET_ALL}")
+                        time.sleep(2)
+                        print("\n")
+                        creepy_print(f"{Fore.RED}You have certainly caught my attention. Slaying a goblin cheiftan is no small feat, my new friend! I see great potentIIi&@IAALllsSS^@*ER@@@viTuDE##E-potential in you!{Style.RESET_ALL}")
+                        time.sleep(2)
+                        print("\n")
+                        time.sleep(2)
+                        print("\n")
+                        audio.stop_music(fade_ms=4000) # Fades out cleanly over 4 seconds
+                        time.sleep(2)
+                        creepy_print(f"{Fore.RED}Don't disappoint me.{Style.RESET_ALL}")
+                        time.sleep(5)
+                
+                    room['item'] = None # Remove item from room
+                else:
+                    print(f"Error: '{room_item_raw}' exists in the room but isn't defined in MASTER_ITEMS.")
+            else:
+                print("That item isn't here.")
+                
+        # Character interactions
+        elif action == 'talk':
+            target_character = None
+            if remaining_text:
+                if remaining_text.lower().startswith('to '):
+                    target_character = remaining_text[3:].strip()
+                else:
+                    target_character = remaining_text.strip()
+
+            room_chars_lower = {char.lower(): char for char in room['characters']} if room['characters'] else {}
+            matched_character = room_chars_lower.get(target_character.lower()) if target_character else None
+
+            if matched_character:
+                print(f"You talk to the {matched_character}.")
+    
+                # Dynamically load the character's conversation graph from JSON
+                dialogue_system.start_conversation(matched_character)
+
+                # Determine start node entry point
+                start_node_key = "start"
+                quest_name = "Goblin Menace"
+    
+                # 2. Run the dialogue if the character actually has a script written for them
+                if dialogue_system.dialogue_map and start_node_key in dialogue_system.dialogue_map:
+                    current_node = dialogue_system.dialogue_map[start_node_key]
+                    
+                    while True:
+                        time.sleep(1)
+                        print(f"\n{current_node.speaker}: {current_node.text}")
+            
+                        # If the node has no choices left, the conversation naturally ends
+                        if not current_node.options:
+                            break
+                
+                        for idx, option in enumerate(current_node.options, 1):
+                            print(f"{idx}. {option.text}")
+                
+                        choice = input("\nChoose an option (number): ").strip()
+                        if choice.isdigit():
+                            choice_idx = int(choice) - 1
+
+                            if 0 <= choice_idx < len(current_node.options):
+                                selected_option = current_node.options[choice_idx]
+                                next_node_id = selected_option.next_node_id
+
+                                # Ale purchase and quest discount integration
+                                if matched_character == "Terry the bartender" and next_node_id == "drink_yes":
+                                    # Scenario A: Quest is turned in (Drinks are free)
+                                    if quest_name in player.quests and player.quests[quest_name].status == "turned_in":
+                                        next_node_id = "drink_free"
+                                    else:
+                                        # Scenario B: Quest not done, check if player has enough money
+                                        if getattr(player, 'gold', 0) >= 5:
+                                            player.gold -= 5
+                                            print(f"\nYou hand Terry 5 gold coins. (Remaining Gold: {player.gold})")
+                                            time.sleep(1)
+                                        else:
+                                            next_node_id = "drink_no_gold"
+                                
+                                # Intercept the generic quest check ID
+                                if  matched_character == "Terry the bartender" and next_node_id == "check_quest_status":
+                                    if quest_name not in player.quests:
+                                        next_node_id = "quest_not_started"
+                                    elif player.quests[quest_name].status == "active":
+                                        next_node_id = "quest_active"
+                                    elif player.quests[quest_name].status == "objective_complete":
+                                        next_node_id = "quest_reward_turnin"
+                                        # Triggers quest turn in immediately
+                                        player.quests[quest_name].complete_quest(player)
+                                        player.gold += 500
+                                        time.sleep(2)
+                                    else:
+                                        next_node_id = "quest_already_done"
+
+                                # Quest acceptance integration
+                                if matched_character == "Terry the bartender" and next_node_id == "quest_yes":
+                                    if quest_name not in player.quests:
+                                        new_quest = Quests(
+                                            title=quest_name,
+                                            description="Clear the goblins out of the Dark Forest north of town.",
+                                            reward="500 Gold & Free Drinks",
+                                            completed="no"
+                                        )
+                                        new_quest.status = "active"
+                                        player.quests[quest_name] = new_quest
+                                        print(f"\nQUEST ACCEPTED: '{quest_name}' has been added to your log!")
+                                        time.sleep(1)
+
+                                if matched_character == "Ozzy the shopkeeper" and next_node_id == "shop_yes":
+                                    merchant_shop.enter_shop(player)
+                                
+                                current_node = dialogue_system.dialogue_map[next_node_id]
+                            else:
+                                print(f"{matched_character} looks at you with a puzzled expression. Please select a valid option.")
+                        else:
+                            print(f"{matched_character} looks at you with a puzzled expression. Please select a valid option.")
+                else:
+                    # Fallback if a character is in the room but has no JSON entry yet
+                    print(f"The {matched_character} has nothing to say right now.")
+
+                if matched_character == 'Villager 1':
+                    time.sleep(1)
+                    print("I was once a hero like you, then I took an arrow to the knee.")
+                    time.sleep(1)
+                elif matched_character == 'Villager 2':
+                    print("Something interesting I learned: wolves hunt in packs, and they're weak to fire! Who would've thought?!")
+                    time.sleep(1)
+            else:
+                print("That character isn't here.")
+        else:
+            print("Your character feels as though they are having a stroke. Invalid command.")
+
+if __name__ == "__main__":
+    game = MainGame()
